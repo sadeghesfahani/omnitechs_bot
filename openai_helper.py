@@ -1,7 +1,8 @@
 import os
 import subprocess
 import openai
-from config import OPENAI_API_KEY
+from config import OPENAI_API_KEY, PRICING
+from utils.files import get_audio_duration
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY)  # ✅ Correct OpenAI client setup
 
@@ -15,7 +16,14 @@ async def ask_openai(prompt):
             temperature=0.7
         )
 
-        return response.choices[0].message.content  # ✅ Correct way to access response
+        # Extract token usage from OpenAI response
+        tokens_used = response.usage.total_tokens
+        input_tokens = response.usage.prompt_tokens
+        output_tokens = response.usage.completion_tokens
+        # Calculate cost
+        cost = (input_tokens * PRICING["gpt-4-turbo"]["input"]) + (output_tokens * PRICING["gpt-4-turbo"]["output"])
+
+        return [response.choices[0].message.content, cost]  # ✅ Correct way to access response
 
     except Exception as e:
         return f"Error: {e}"
@@ -27,7 +35,9 @@ def transcribe(wav_path):
             model="whisper-1",
             file=audio_file
         )
-        return transcript.text
+        audio_duration = get_audio_duration(wav_path)
+        cost = audio_duration * PRICING["whisper-1"]["audio"]
+        return transcript.text, cost
 # Transcribe Audio to Text
 #     with open(wav_path, "rb") as audio_file:
 #         transcript = openai.Audio.transcribe("whisper-1", audio_file)
@@ -41,6 +51,9 @@ def create_voice_out_of_text(message_id,text):
         voice="alloy",
         input=text
     )
+
+    character_count = len(text)
+    cost = (character_count / 1000) * PRICING["tts-1"]["audio"]
     if response.content is None:
         print("❌ Failed to generate audio.")
         return
@@ -72,4 +85,4 @@ def create_voice_out_of_text(message_id,text):
         "-y", ogg_path  # Output file
     ], check=True)
 
-    return ogg_path
+    return ogg_path, cost

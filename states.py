@@ -12,3 +12,7 @@ class NavigationState(StatesGroup):
 
 class translationState(StatesGroup):
     waiting_for_first_language = State()
+
+
+class LanguageState(StatesGroup):
+    languages = State()

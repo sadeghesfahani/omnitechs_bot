@@ -7,7 +7,9 @@ from aiogram.fsm.context import FSMContext
 import subprocess
 from openai_helper import ask_openai, transcribe, create_voice_out_of_text
 from states import UserState, NavigationState, translationState
+from utils.files import load_costs
 from utils.keyboard import generate_keyboard
+from utils.open_ai import update_user_cost
 
 router = Router()
 
@@ -28,10 +30,86 @@ REPLY_KEYBOARD_JSON = {
     "one_time": True,
     "buttons": [
         [{"text": "Translate"}],
-        [{"text": "Send Contact (test)", "request_contact": True}],
-        [{"text": "Share Location (test)", "request_location": True}]
     ]
 }
+
+@router.message(Command("cost"))
+async def get_user_cost(message: Message):
+    """Command to check the cost for each user in a formatted table."""
+    user_costs = load_costs()  # Load costs from file
+
+    user_id_str = str(message.from_user.id)
+    user_cost = user_costs.get(user_id_str, {"cost": 0})["cost"]
+
+    # Calculate total cost across all users
+    total_cost = sum(user["cost"] for user in user_costs.values())
+
+    # Format the table header
+    table_header = "👥 *User*            | 💰 *Cost (USD)*\n" + "-" * 30 + "\n"
+
+    # Format each user's cost with their name
+    table_rows = [
+        f"{user['name'][:15]:<15} | ${user['cost']:.4f}"
+        for user in user_costs.values()
+    ]
+
+    # Combine everything
+    response_text = (
+        f"💰 *Your total OpenAI API usage cost:* `${user_cost:.4f}`\n"
+        f"🌍 *Total usage by all users:* `${total_cost:.4f}`\n\n"
+        f"📊 *Cost Breakdown:*\n"
+        f"```{table_header}\n" + "\n".join(table_rows) + "```"
+    )
+
+    await message.answer(response_text, parse_mode="MarkdownV2")
+
+
+@router.message(Command("help"))
+async def send_help(message: Message):
+    help_text = (
+        "🤖 *Translation Bot - Quick Guide*\n"
+    "📝 Supports *text & voice translation*.\n\n"
+    "📌 *Commands:*\n"
+    "🔄 /language first_language second_language – Set translation languages\n"
+    "💬 /ask your question – Ask ChatGPT\n"
+    "🔄 /start – Restart the bot\n"
+    "ℹ️ Use /help anytime for guidance."
+    )
+
+    await message.answer(help_text, parse_mode="Markdown")
+
+@router.message(Command("language"))
+async def set_languages(message: Message, state: FSMContext):
+    args = message.text.split()[1:]  # Extracts the arguments after "/language"
+
+    if not args:
+        await message.answer("❌ Please specify one or two languages. Example: `/language english polish`")
+        return
+
+    # Retrieve current state
+    data = await state.get_data()
+    language_list = data.get("languages", [])
+
+    # Handle input logic
+    if len(args) == 1:
+        # If only one language is provided, keep the last one and add the new one
+        if language_list:
+            language_list = [language_list[-1], args[0].lower()]
+        else:
+            language_list = [args[0].lower()]
+    elif len(args) >= 2:
+        # If two languages are provided, overwrite the list
+        language_list = [args[0].lower(), args[1].lower()]
+
+    # Ensure max size is 2
+    language_list = language_list[-2:]
+
+    # Save updated state
+    await state.update_data(languages=language_list)
+
+    # Send confirmation
+    await message.answer(f"✅ Active languages: {language_list[0]} ↔ {language_list[1]}" if len(language_list) == 2 else f"✅ Active language: {language_list[0]}")
+
 @router.message(Command("menu"))
 async def send_inline_keyboard(message: Message):
     keyboard = generate_keyboard(INLINE_KEYBOARD_JSON)
@@ -51,14 +129,20 @@ async def chat_with_openai(message: Message):
         return
 
     await message.answer("Thinking... 🤖")
-    response = await ask_openai(user_input)
+    response, cost = await ask_openai(user_input)
 
     await message.answer(response)
 
 @router.message(Command("start"))
 async def start_command(message: Message, state: FSMContext):
     keyboard = generate_keyboard(REPLY_KEYBOARD_JSON)
-    await message.answer("Welcome to the Omni Techs AI chatbot, please choose an area",reply_markup=keyboard)
+    welcome_text = (
+    "👋 *Welcome to Omni Techs AI Chatbot!*\n"
+    "🔄 Supports both *voice & text translation*.\n"
+    "📌 Click *Translate* to start.\n"
+    "ℹ️ Use /help for advanced options."
+    )
+    await message.answer(welcome_text,reply_markup=keyboard)
 
 
 
@@ -88,6 +172,7 @@ async def process_first_language(message: Message, state: FSMContext):
     await message.answer("Thinking... 🤖")
     user_text = ""
     message_type =""
+    final_cost = 0
     if message.voice:  # If the user sends a voice message
         await message.answer("Fetching audio 🤖")
         message_type = "voice"
@@ -100,21 +185,38 @@ async def process_first_language(message: Message, state: FSMContext):
         wav_path = file_path.replace(".ogg", ".wav")
         subprocess.run(["/opt/homebrew/bin/ffmpeg", "-i", file_path, wav_path, "-y"])
 
-        user_text = transcribe(wav_path)
+        user_text, cost = transcribe(wav_path)
+        final_cost += cost
 
     else:  # If the user sends a text message
         user_text = message.text
 
+    # Retrieve active languages from state
+    data = await state.get_data()
+    language_list = data.get("languages", [])
+
+    if len(language_list) == 1:
+        language_list.append("english")
+
+    if len(language_list) == 0:
+        language_list = ["english", "polish"]
+
+
+    source_lang, target_lang = language_list  # Extract the language pair
+
     final_message = (
-        "Please translate to either English or Polish based on the user's input. "
-        "If it's in English, translate it to Polish. If it's in Polish, translate it to English. "
-        f"The user message is as follows: '{user_text}'"
+        f"Please translate the following text.\n"
+        f"If it's in {source_lang}, translate it to {target_lang}.\n"
+        f"If it's in {target_lang}, translate it to {source_lang}.\n"
+        f"User message: '{user_text}'"
     )
-    response = await ask_openai(final_message)
+    response, cost = await ask_openai(final_message)
+    final_cost += cost
+
     if message_type == "voice":
         await message.answer("Converting text to audio 🤖")
-        output_path = create_voice_out_of_text(message.message_id,response)
-        print(output_path)
+        output_path, cost = create_voice_out_of_text(message.message_id,response)
+        final_cost += cost
         audio_file = FSInputFile(output_path)
         # Send the file to the user
         await message.answer_audio(audio=audio_file)
@@ -122,6 +224,13 @@ async def process_first_language(message: Message, state: FSMContext):
 
     else:
         await message.answer(response)
+
+    await update_user_cost(
+        user_id=message.from_user.id,
+        user_name=message.from_user.full_name or message.from_user.username or "Unknown",
+        cost=final_cost,
+    )
+
 @router.message()
 async def handle_text(message: Message, state: FSMContext):
     if message.text == "Translate":
