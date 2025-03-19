@@ -1,14 +1,18 @@
-from aiogram import Router, F
-from aiogram.types import Message
+import os
+
+from aiogram import Router, Bot
+from aiogram.types import Message, FSInputFile
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-
-from openai_helper import ask_openai
+import subprocess
+from openai_helper import ask_openai, transcribe, create_voice_out_of_text
 from states import UserState, NavigationState, translationState
 from utils.keyboard import generate_keyboard
 
 router = Router()
 
+DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 INLINE_KEYBOARD_JSON = {
     "type": "inline",
@@ -82,10 +86,42 @@ async def process_age(message: Message, state: FSMContext):
 @router.message(translationState.waiting_for_first_language)
 async def process_first_language(message: Message, state: FSMContext):
     await message.answer("Thinking... 🤖")
-    final_message = "Please translate to either english or polish based on what the user input is, if it's in english translate to polish, if it's polish, translate to English. the user message is as the following: '" + message.text + "'"
-    response = await ask_openai(final_message)
+    user_text = ""
+    message_type =""
+    if message.voice:  # If the user sends a voice message
+        await message.answer("Fetching audio 🤖")
+        message_type = "voice"
+        file_info = await message.bot.get_file(message.voice.file_id)  # Fetch file info
+        file_path = f"downloads/{message.voice.file_id}.ogg"
+        await message.bot.download_file(file_info.file_path, file_path)  # Download the file
 
-    await message.answer(response)
+        await message.answer("Converting audio to text 🤖")
+        # Convert OGG to WAV for Whisper
+        wav_path = file_path.replace(".ogg", ".wav")
+        subprocess.run(["/opt/homebrew/bin/ffmpeg", "-i", file_path, wav_path, "-y"])
+
+        user_text = transcribe(wav_path)
+
+    else:  # If the user sends a text message
+        user_text = message.text
+
+    final_message = (
+        "Please translate to either English or Polish based on the user's input. "
+        "If it's in English, translate it to Polish. If it's in Polish, translate it to English. "
+        f"The user message is as follows: '{user_text}'"
+    )
+    response = await ask_openai(final_message)
+    if message_type == "voice":
+        await message.answer("Converting text to audio 🤖")
+        output_path = create_voice_out_of_text(message.message_id,response)
+        print(output_path)
+        audio_file = FSInputFile(output_path)
+        # Send the file to the user
+        await message.answer_audio(audio=audio_file)
+        # message.answer_audio(audio_file=output_path)
+
+    else:
+        await message.answer(response)
 @router.message()
 async def handle_text(message: Message, state: FSMContext):
     if message.text == "Translate":

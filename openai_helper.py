@@ -1,3 +1,5 @@
+import os
+import subprocess
 import openai
 from config import OPENAI_API_KEY
 
@@ -17,3 +19,57 @@ async def ask_openai(prompt):
 
     except Exception as e:
         return f"Error: {e}"
+
+
+def transcribe(wav_path):
+    with open(wav_path, "rb") as audio_file:
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file
+        )
+        return transcript.text
+# Transcribe Audio to Text
+#     with open(wav_path, "rb") as audio_file:
+#         transcript = openai.Audio.transcribe("whisper-1", audio_file)
+#         user_text = transcript["text"]
+#         return user_text
+
+
+def create_voice_out_of_text(message_id,text):
+    response = client.audio.speech.create(
+        model="tts-1",
+        voice="alloy",
+        input=text
+    )
+    if response.content is None:
+        print("❌ Failed to generate audio.")
+        return
+        # Define a dynamic directory for saving audio files
+    print("here we are")
+    output_dir = os.path.join(os.getcwd(), "downloads")  # Saves in a 'downloads' folder
+    os.makedirs(output_dir, exist_ok=True)  # Ensure directory exists
+
+    # Create a unique filename based on message ID
+    output_filename = f"speech_{message_id}.mp3"
+    output_path = os.path.join(output_dir, output_filename)
+    with open(output_path, "wb") as audio_file:
+        audio_file.write(response.content)
+
+        # Create a unique filename
+        mp3_filename = f"speech_{message_id}.mp3"
+        mp3_path = os.path.join(output_dir, mp3_filename)
+
+    # Convert MP3 to OGG (Opus format for Telegram voice messages)
+    ogg_filename = f"speech_{message_id}.ogg"
+    ogg_path = os.path.join(output_dir, ogg_filename)
+
+    subprocess.run([
+        "/opt/homebrew/bin/ffmpeg", "-i", mp3_path,  # Input MP3 file
+        "-c:a", "libopus",  # Use Opus codec
+        "-b:a", "32k",  # Set bitrate (adjustable, 32k is Telegram standard)
+        "-ar", "48000",  # Sample rate required for Telegram voice messages
+        "-ac", "1",  # Mono audio
+        "-y", ogg_path  # Output file
+    ], check=True)
+
+    return ogg_path
