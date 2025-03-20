@@ -1,5 +1,6 @@
 import os
-
+from babel import Locale
+import requests
 from aiogram import Router, Bot
 from aiogram.types import Message, FSInputFile
 from aiogram.filters import Command
@@ -8,11 +9,12 @@ import subprocess
 from openai_helper import ask_openai, transcribe, create_voice_out_of_text
 from states import UserState, NavigationState, translationState
 from utils.files import load_costs
+from utils.general import get_language_name
 from utils.keyboard import generate_keyboard
 from utils.open_ai import update_user_cost
 
 router = Router()
-
+DJANGO_API_URL = "http://127.0.0.1:8000"
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -133,8 +135,29 @@ async def chat_with_openai(message: Message):
 
     await message.answer(response)
 
+
+
 @router.message(Command("start"))
 async def start_command(message: Message, state: FSMContext):
+    """Sends user data to Django when they start the bot"""
+    language = get_language_name(message.from_user.language_code)
+    user_data = {
+        "telegram_id": message.from_user.id,
+        "username": message.from_user.username,
+        "first_name": message.from_user.first_name,
+        "last_name": message.from_user.last_name,
+        "default_language": language,
+    }
+    print(message.from_user)
+    # Send data to Django
+    response = requests.post(DJANGO_API_URL + "/user/save_telegram_user/", json=user_data)
+
+    # Handle response
+    if response.status_code == 200:
+        await message.answer("Welcome! Your data has been saved.")
+    else:
+        await message.answer("Error saving your data.")
+
     keyboard = generate_keyboard(REPLY_KEYBOARD_JSON)
     welcome_text = (
     "👋 *Welcome to Omni Techs AI Chatbot!*\n"
@@ -143,6 +166,12 @@ async def start_command(message: Message, state: FSMContext):
     "ℹ️ Use /help for advanced options."
     )
     await message.answer(welcome_text,reply_markup=keyboard)
+
+@router.message(Command("user"))
+async def start_command(message: Message, state: FSMContext):
+    """Sends user data to Django when they start the bot"""
+    response = requests.get(DJANGO_API_URL + f"/user/{message.from_user.id}/")
+    print(response.json())
 
 
 

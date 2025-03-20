@@ -7,7 +7,6 @@ from utils.files import get_audio_duration
 client = openai.OpenAI(api_key=OPENAI_API_KEY)  # ✅ Correct OpenAI client setup
 
 async def ask_openai(prompt):
-    print("here")  # Debugging statement
 
     try:
         response = client.chat.completions.create(  # ✅ New API format
@@ -38,11 +37,6 @@ def transcribe(wav_path):
         audio_duration = get_audio_duration(wav_path)
         cost = audio_duration * PRICING["whisper-1"]["audio"]
         return transcript.text, cost
-# Transcribe Audio to Text
-#     with open(wav_path, "rb") as audio_file:
-#         transcript = openai.Audio.transcribe("whisper-1", audio_file)
-#         user_text = transcript["text"]
-#         return user_text
 
 
 def create_voice_out_of_text(message_id,text):
@@ -58,7 +52,6 @@ def create_voice_out_of_text(message_id,text):
         print("❌ Failed to generate audio.")
         return
         # Define a dynamic directory for saving audio files
-    print("here we are")
     output_dir = os.path.join(os.getcwd(), "downloads")  # Saves in a 'downloads' folder
     os.makedirs(output_dir, exist_ok=True)  # Ensure directory exists
 

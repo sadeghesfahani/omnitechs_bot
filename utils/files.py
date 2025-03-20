@@ -31,8 +31,6 @@ def load_costs():
     return {}
 
 def save_costs(user_costs):
-    print('here at save cost')
-    print(user_costs)
     """Save user costs to a JSON file."""
     with open(COST_FILE, "w", encoding="utf-8") as file:
         json.dump(user_costs, file, indent=4)
