@@ -37,10 +37,14 @@ def generate_keyboard(json_data):
         return None  # Invalid keyboard type
 
 
-def get_namespace_keyboard():
+# Generate the keyboard, showing the selected namespace with a checkmark
+async def get_namespace_keyboard(current: str = None):
     builder = InlineKeyboardBuilder()
-    options = ["Option A", "Option B", "Option C"]
+    options = ["Translate", "Invoices", "Expenses","Chat"]
+
     for option in options:
-        builder.button(text=option, callback_data=f"namespace:{option}")
+        label = f"✅ {option}" if option == current else option
+        builder.button(text=label, callback_data=f"namespace:{option}")
+
     builder.adjust(1)
     return builder.as_markup()

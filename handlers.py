@@ -1,7 +1,9 @@
 import os
+
+from aiogram.enums import ParseMode, ChatAction
 from babel import Locale
 import requests
-from aiogram import Router, Bot
+from aiogram import Router, Bot, types, F
 from aiogram.types import Message, FSInputFile
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -130,9 +132,13 @@ async def set_languages(message: Message, state: FSMContext):
     await message.answer(f"✅ Active languages: {language_list[0]} ↔ {language_list[1]}" if len(language_list) == 2 else f"✅ Active language: {language_list[0]}")
 
 @router.message(Command("menu"))
-async def send_inline_keyboard(message: Message,state: FSMContext):
-    await message.answer("Choose a namespace:", reply_markup=get_namespace_keyboard())
+async def send_inline_keyboard(message: Message,state: FSMContext,bot: Bot):
+    await message.delete()
+
+    keyboard = await get_namespace_keyboard()
+    msg = await message.answer("Choose a namespace:", reply_markup=keyboard)
     await state.set_state(Form.namespace)
+    await state.update_data(tracked_bot_messages=[msg.message_id])
 
 @router.message(Command("menu1"))
 async def send_inline_keyboard(message: Message):
@@ -175,14 +181,12 @@ async def start_command(message: Message, state: FSMContext):
     else:
         await message.answer("Error saving your data.")
 
-    keyboard = generate_keyboard(REPLY_KEYBOARD_JSON)
-    welcome_text = (
-    "👋 *Welcome to Omni Techs AI Chatbot!*\n"
-    "🔄 Supports both *voice & text translation*.\n"
-    "📌 Click *Translate* to start.\n"
-    "ℹ️ Use /help for advanced options."
-    )
-    await message.answer(welcome_text,reply_markup=keyboard)
+    await message.delete()
+
+    keyboard = await get_namespace_keyboard()
+    msg = await message.answer("Choose a namespace:", reply_markup=keyboard)
+    await state.set_state(Form.namespace)
+    await state.update_data(tracked_bot_messages=[msg.message_id])
 
 @router.message(Command("user"))
 async def start_command(message: Message, state: FSMContext):
@@ -214,19 +218,20 @@ async def process_age(message: Message, state: FSMContext):
 
 
 @router.message(TranslationState.waiting_for_first_language)
-async def process_first_language(message: Message, state: FSMContext):
-    await message.answer("Thinking... 🤖")
+async def process_first_language(message: Message, state: FSMContext, bot:Bot):
+
     user_text = ""
     message_type =""
     final_cost = 0
     if message.voice:  # If the user sends a voice message
-        await message.answer("Fetching audio 🤖")
+        await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.RECORD_VOICE)
+        # await message.answer("Fetching audio 🤖")
         message_type = "voice"
         file_info = await message.bot.get_file(message.voice.file_id)  # Fetch file info
         file_path = f"downloads/{message.voice.file_id}.ogg"
         await message.bot.download_file(file_info.file_path, file_path)  # Download the file
 
-        await message.answer("Converting audio to text 🤖")
+        # await message.answer("Converting audio to text 🤖")
         # Convert OGG to WAV for Whisper
         wav_path = file_path.replace(".ogg", ".wav")
         subprocess.run(["/opt/homebrew/bin/ffmpeg", "-i", file_path, wav_path, "-y"])
@@ -249,7 +254,7 @@ async def process_first_language(message: Message, state: FSMContext):
 
 
     source_lang, target_lang = language_list  # Extract the language pair
-
+    await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
     final_message = (
         f"Please translate the following text.\n"
         f"If it's in {source_lang}, translate it to {target_lang}.\n"
@@ -260,7 +265,7 @@ async def process_first_language(message: Message, state: FSMContext):
     final_cost += cost
 
     if message_type == "voice":
-        await message.answer("Converting text to audio 🤖")
+        await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.RECORD_VOICE)
         output_path, cost = create_voice_out_of_text(message.message_id,response)
         final_cost += cost
         audio_file = FSInputFile(output_path)
@@ -278,6 +283,58 @@ async def process_first_language(message: Message, state: FSMContext):
     )
 
 @router.message()
-async def handle_text(message: Message, state: FSMContext):
+async def handle_text(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    namespace = data.get("namespace")
+
+    if namespace == "Translate":
+        await process_first_language(message, state, bot)
+
+    elif namespace == "Chat":
+        await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+        response, _ = await ask_openai(message.text)
+
+        await message.answer(response)
+
+    else:
+        await message.answer(f"❌ No handler defined for namespace: `{namespace}`")
     if message.text == "Translate":
         await state.set_state(TranslationState.waiting_for_first_language)
+
+
+
+@router.callback_query(F.data.startswith("namespace:"), Form.namespace)
+async def handle_namespace_callback(callback: types.CallbackQuery, state: FSMContext,bot: Bot):
+    namespace_value = callback.data.split("namespace:")[1]
+    await state.update_data(namespace=namespace_value)
+
+    await callback.answer()
+
+    # Get and delete all previous tracked bot messages
+    data = await state.get_data()
+    tracked_msg_ids = data.get("tracked_bot_messages", [])
+
+    for msg_id in tracked_msg_ids:
+        try:
+            await bot.delete_message(chat_id=callback.message.chat.id, message_id=msg_id)
+        except:
+            pass  # Might already be deleted or invalid
+
+    # Send new inline keyboard
+    keyboard = await get_namespace_keyboard(namespace_value)
+    # Base message
+    new_text = f"✅ Current namespace: *{namespace_value}*\n\n"
+
+    if namespace_value.lower() == "translate":
+        languages = data.get("languages", ["english", "polish"])  # fallback defaults
+        if len(languages) < 2:
+            languages.append("english")
+        lang1, lang2 = languages[:2]
+        new_text += (
+            f"\n\n🌍 Current languages: *{lang1}* ↔ *{lang2}*"
+            f"\n\n🛠️ To change, use: `/language {lang1} {lang2}`"
+        )
+    new_msg = await callback.message.answer(new_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
+
+    # Track only this new message
+    await state.update_data(tracked_bot_messages=[new_msg.message_id])
