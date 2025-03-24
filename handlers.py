@@ -6,7 +6,7 @@ from aiogram.types import Message, FSInputFile
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 import subprocess
-from openai_helper import ask_openai, transcribe, create_voice_out_of_text
+from openai_helper import ask_openai, transcribe, create_voice_out_of_text, ask_intention_function
 from states import UserState, NavigationState, translationState
 from utils.files import load_costs
 from utils.general import get_language_name
@@ -34,6 +34,23 @@ REPLY_KEYBOARD_JSON = {
         [{"text": "Translate"}],
     ]
 }
+
+
+@router.message(Command("intention"))
+async def ask_intention(message: Message):
+    prompt = message.text.replace("/intention", "").strip()
+    if not prompt:
+        await message.answer("Please provide a prompt after /intention")
+        return
+    response, cost = await ask_intention_function(prompt)
+    await message.answer(response)
+    await update_user_cost(
+        user_id=message.from_user.id,
+        user_name=message.from_user.full_name or message.from_user.username or "Unknown",
+        cost=cost
+    )
+
+
 
 @router.message(Command("cost"))
 async def get_user_cost(message: Message):

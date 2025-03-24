@@ -1,8 +1,10 @@
+import json
 import os
 import subprocess
 import openai
 from config import OPENAI_API_KEY, PRICING
 from utils.files import get_audio_duration
+from utils.functions import create_invoice
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY)  # ✅ Correct OpenAI client setup
 
@@ -27,6 +29,78 @@ async def ask_openai(prompt):
     except Exception as e:
         return f"Error: {e}"
 
+functions = [
+    {
+        "name": "create_invoice",
+        "description": "Create a Tryton invoice with line items",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "client_id": {
+                    "type": "integer",
+                    "description": "The ID of the client (party) in Tryton"
+                },
+                "currency": {
+                    "type": "string",
+                    "description": "Currency code, e.g., EUR or USD"
+                },
+                "items": {
+                    "type": "array",
+                    "description": "List of items in the invoice",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "product_id": {"type": "integer"},
+                            "quantity": {"type": "number"},
+                            "price": {"type": "number"}
+                        },
+                        "required": ["product_id", "quantity", "price"]
+                    }
+                }
+            },
+            "required": ["client_id", "items"]
+        }
+    }
+]
+
+
+async def call_openai_function(message):
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are an assistant that helps manage invoices and financial tasks for a business. You use structured function calls to handle tasks like creating invoices."},
+                {"role": "user", "content": message}
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": func
+                } for func in functions
+            ],
+            tool_choice="auto"
+        )
+
+        choice = response.choices[0]
+        message = choice.message
+        print(message)
+        if message.tool_calls:
+            for tool_call in message.tool_calls:
+                func_name = tool_call.function.name
+                arguments = json.loads(tool_call.function.arguments)
+
+                if func_name == "create_invoice":
+                    return create_invoice(**arguments)
+
+        return message.content or "Function executed, no response content."
+
+    except Exception as e:
+        return f"Error in function call: {e}"
+
+async def ask_intention_function(prompt):
+    result = await call_openai_function(prompt)
+    cost = 0.0  # Replace with real token cost if needed
+    return result, cost
 
 def transcribe(wav_path):
     with open(wav_path, "rb") as audio_file:
