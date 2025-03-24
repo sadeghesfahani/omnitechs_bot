@@ -35,3 +35,12 @@ def generate_keyboard(json_data):
 
     else:
         return None  # Invalid keyboard type
+
+
+def get_namespace_keyboard():
+    builder = InlineKeyboardBuilder()
+    options = ["Option A", "Option B", "Option C"]
+    for option in options:
+        builder.button(text=option, callback_data=f"namespace:{option}")
+    builder.adjust(1)
+    return builder.as_markup()

@@ -7,10 +7,10 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 import subprocess
 from openai_helper import ask_openai, transcribe, create_voice_out_of_text, ask_intention_function
-from states import UserState, NavigationState, translationState
+from states import UserState, NavigationState, TranslationState, Form
 from utils.files import load_costs
 from utils.general import get_language_name
-from utils.keyboard import generate_keyboard
+from utils.keyboard import generate_keyboard, get_namespace_keyboard
 from utils.open_ai import update_user_cost
 
 router = Router()
@@ -130,9 +130,9 @@ async def set_languages(message: Message, state: FSMContext):
     await message.answer(f"✅ Active languages: {language_list[0]} ↔ {language_list[1]}" if len(language_list) == 2 else f"✅ Active language: {language_list[0]}")
 
 @router.message(Command("menu"))
-async def send_inline_keyboard(message: Message):
-    keyboard = generate_keyboard(INLINE_KEYBOARD_JSON)
-    await message.answer("Choose an option:", reply_markup=keyboard)
+async def send_inline_keyboard(message: Message,state: FSMContext):
+    await message.answer("Choose a namespace:", reply_markup=get_namespace_keyboard())
+    await state.set_state(Form.namespace)
 
 @router.message(Command("menu1"))
 async def send_inline_keyboard(message: Message):
@@ -148,7 +148,7 @@ async def chat_with_openai(message: Message):
         return
 
     await message.answer("Thinking... 🤖")
-    response, cost = await ask_openai(user_input)
+    response, _ = await ask_openai(user_input)
 
     await message.answer(response)
 
@@ -213,7 +213,7 @@ async def process_age(message: Message, state: FSMContext):
     await state.clear()  # Reset state after completion
 
 
-@router.message(translationState.waiting_for_first_language)
+@router.message(TranslationState.waiting_for_first_language)
 async def process_first_language(message: Message, state: FSMContext):
     await message.answer("Thinking... 🤖")
     user_text = ""
@@ -280,4 +280,4 @@ async def process_first_language(message: Message, state: FSMContext):
 @router.message()
 async def handle_text(message: Message, state: FSMContext):
     if message.text == "Translate":
-        await state.set_state(translationState.waiting_for_first_language)
+        await state.set_state(TranslationState.waiting_for_first_language)
