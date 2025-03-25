@@ -1,6 +1,8 @@
 import json
 import os
 import subprocess
+from typing import Literal
+
 import openai
 from config import OPENAI_API_KEY, PRICING
 from utils.files import get_audio_duration
@@ -112,11 +114,15 @@ def transcribe(wav_path):
         cost = audio_duration * PRICING["whisper-1"]["audio"]
         return transcript.text, cost
 
+def get_openai_voice_model(gender)->Literal["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"]:
+    return (
+        "alloy" if gender == "male" else "nova"
+    )
 
-def create_voice_out_of_text(message_id,text):
+def create_voice_out_of_text(message_id,text, gender):
     response = client.audio.speech.create(
         model="tts-1",
-        voice="alloy",
+        voice=get_openai_voice_model(gender),
         input=text
     )
 

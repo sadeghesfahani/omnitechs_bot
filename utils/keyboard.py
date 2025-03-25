@@ -40,7 +40,7 @@ def generate_keyboard(json_data):
 # Generate the keyboard, showing the selected namespace with a checkmark
 async def get_namespace_keyboard(current: str = None):
     builder = InlineKeyboardBuilder()
-    options = ["Translate", "Invoices", "Expenses","Chat"]
+    options = ["Translate", "Invoices", "Expenses","Chat","Chat bot"]
 
     for option in options:
         label = f"✅ {option}" if option == current else option

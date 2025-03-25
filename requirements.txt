@@ -29,3 +29,7 @@ SQLAlchemy==2.0.39
 tqdm==4.67.1
 typing_extensions==4.12.2
 yarl==1.18.3
+
+babel~=2.17.0
+requests~=2.32.3
+pyAudioAnalysis~=0.3.14

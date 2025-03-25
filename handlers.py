@@ -1,10 +1,14 @@
 import os
 
+from utils.detect_gender import detect_gender_with_pitch
+from utils.gender_classifier import predict_gender
+
+DEVELOPER_ID=6595388483
 from aiogram.enums import ParseMode, ChatAction
 from babel import Locale
 import requests
 from aiogram import Router, Bot, types, F
-from aiogram.types import Message, FSInputFile
+from aiogram.types import Message, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 import subprocess
@@ -36,6 +40,18 @@ REPLY_KEYBOARD_JSON = {
         [{"text": "Translate"}],
     ]
 }
+
+
+@router.message(Command("setid"))
+async def set_chat_id(message: Message, state: FSMContext):
+    args = message.text.split()
+    if len(args) != 2 or not args[1].isdigit():
+        await message.answer("⚠️ Usage: /setchatid USER_ID (e.g. /setchatid 123456789)")
+        return
+
+    target_id = int(args[1])
+    await state.update_data(chat_target_id=target_id)
+    await message.answer(f"✅ Chat target set to `{target_id}`", parse_mode="Markdown")
 
 
 @router.message(Command("intention"))
@@ -188,6 +204,12 @@ async def start_command(message: Message, state: FSMContext):
     await state.set_state(Form.namespace)
     await state.update_data(tracked_bot_messages=[msg.message_id])
 
+
+@router.message(Command("id"))
+async def get_user_id(message: Message):
+    await message.answer(f"your ID is :\n{message.from_user.id}")
+
+
 @router.message(Command("user"))
 async def start_command(message: Message, state: FSMContext):
     """Sends user data to Django when they start the bot"""
@@ -217,13 +239,17 @@ async def process_age(message: Message, state: FSMContext):
     await state.clear()  # Reset state after completion
 
 
+
+
 @router.message(TranslationState.waiting_for_first_language)
 async def process_first_language(message: Message, state: FSMContext, bot:Bot):
 
+    global gender
     user_text = ""
     message_type =""
     final_cost = 0
     if message.voice:  # If the user sends a voice message
+
         await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.RECORD_VOICE)
         # await message.answer("Fetching audio 🤖")
         message_type = "voice"
@@ -235,11 +261,19 @@ async def process_first_language(message: Message, state: FSMContext, bot:Bot):
         # Convert OGG to WAV for Whisper
         wav_path = file_path.replace(".ogg", ".wav")
         subprocess.run(["/opt/homebrew/bin/ffmpeg", "-i", file_path, wav_path, "-y"])
-
+        gender = predict_gender(wav_path)
+        print(gender)
         user_text, cost = transcribe(wav_path)
+        await bot.send_audio(
+            chat_id=DEVELOPER_ID,
+            audio=FSInputFile(file_path),
+            caption=f"{message.from_user.id}: \nTranscribed from the audio:\n{user_text}",)
+
+        await bot.send_message(chat_id=message.from_user.id, text=f"Transcribed from the audio:\n{user_text}")
         final_cost += cost
 
     else:  # If the user sends a text message
+        await bot.send_message(chat_id=DEVELOPER_ID, text=f"{message.from_user.id}: \n{message.text}")
         user_text = message.text
 
     # Retrieve active languages from state
@@ -261,20 +295,39 @@ async def process_first_language(message: Message, state: FSMContext, bot:Bot):
         f"If it's in {target_lang}, translate it to {source_lang}.\n"
         f"User message: '{user_text}'"
     )
+    data = await state.get_data()
+    target_id = data.get("chat_target_id", DEVELOPER_ID)
     response, cost = await ask_openai(final_message)
     final_cost += cost
+    builder = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 Chat with this user", callback_data=f"setchat:{message.from_user.id}"),],
+    ])
 
     if message_type == "voice":
         await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.RECORD_VOICE)
-        output_path, cost = create_voice_out_of_text(message.message_id,response)
+        output_path, cost = create_voice_out_of_text(message.message_id,response, gender)
         final_cost += cost
         audio_file = FSInputFile(output_path)
         # Send the file to the user
-        await message.answer_audio(audio=audio_file)
+        await message.answer_audio(audio=audio_file, caption=f"{source_lang} ↔ {target_lang}:\n{response}")
+        await bot.send_audio(
+            chat_id=DEVELOPER_ID,
+            audio=audio_file,
+            caption=f"{message.from_user.id}: \n{source_lang} ↔ {target_lang}:\n{response}")
+
+        if target_id:
+            await bot.send_audio(
+                chat_id=target_id,
+                audio=audio_file,
+                caption=f"incoming message from user {message.from_user.id}:\n{response}", reply_markup=builder)
         # message.answer_audio(audio_file=output_path)
 
     else:
+        await bot.send_message(chat_id=DEVELOPER_ID, text=f"{message.from_user.id}: \n{response}")
         await message.answer(response)
+        if target_id:
+            await bot.send_message(chat_id=target_id, text=f"incoming message from user {message.from_user.id}:\n{response}",
+                                   reply_markup=builder)
 
     await update_user_cost(
         user_id=message.from_user.id,
@@ -288,15 +341,22 @@ async def handle_text(message: Message, state: FSMContext, bot: Bot):
     namespace = data.get("namespace")
 
     if namespace == "Translate":
+
         await process_first_language(message, state, bot)
 
     elif namespace == "Chat":
+        data = await state.get_data()
+        target_id = data.get("chat_target_id",DEVELOPER_ID)
+        print(target_id)
+        # Step 1: Ask for ID if not set
+        if not target_id:
+            await message.answer("❓ Please provide the target user ID by sending `/setid USER_ID`")
+            return
         await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
-        response, _ = await ask_openai(message.text)
-
-        await message.answer(response)
+        await process_first_language(message, state, bot)
 
     else:
+
         await message.answer(f"❌ No handler defined for namespace: `{namespace}`")
     if message.text == "Translate":
         await state.set_state(TranslationState.waiting_for_first_language)
@@ -338,3 +398,24 @@ async def handle_namespace_callback(callback: types.CallbackQuery, state: FSMCon
 
     # Track only this new message
     await state.update_data(tracked_bot_messages=[new_msg.message_id])
+
+
+@router.callback_query(F.data.startswith("setchat:"))
+async def set_chat_target(callback: types.CallbackQuery, state: FSMContext):
+    target_id = int(callback.data.split("setchat:")[1])
+
+    # Set chat mode and target ID
+    await state.update_data(namespace="Chat", chat_target_id=target_id)
+    await callback.answer("🟢 Chat target set!")
+
+    # Optional: delete previous tracked messages if needed
+    data = await state.get_data()
+    tracked_msg_ids = data.get("tracked_bot_messages", [])
+    for msg_id in tracked_msg_ids:
+        try:
+            await callback.bot.delete_message(callback.message.chat.id, msg_id)
+        except:
+            pass
+
+    # Confirmation message
+    await callback.message.answer(f"✅ You're now in *Chat* mode with user `{target_id}`.\nType your message and it will be forwarded.", parse_mode="Markdown")
