@@ -353,6 +353,7 @@ async def process_first_language(message: Message, state: FSMContext, bot:Bot):
 
 @router.message()
 async def handle_text(message: Message, state: FSMContext, bot: Bot):
+    global msg
     data = await state.get_data()
     namespace = data.get("namespace")
     print(namespace)
