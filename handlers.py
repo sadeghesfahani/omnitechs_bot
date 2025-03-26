@@ -1,5 +1,6 @@
 import os
 
+from config import DEBUG
 from utils.detect_gender import detect_gender_with_pitch
 from utils.gender_classifier import predict_gender
 
@@ -41,6 +42,17 @@ REPLY_KEYBOARD_JSON = {
     ]
 }
 
+
+
+async def debug_send_message(bot, sender_id, text):
+    print("debug is ",DEBUG, DEBUG=="0")
+    if DEBUG=="1":
+        print("inside")
+        await bot.send_message(chat_id=DEVELOPER_ID, text=f"{sender_id}: \n{text}")
+
+async def debug_send_audio(bot, sender_id, audio_file, caption):
+    if DEBUG=="1":
+        await bot.send_audio(chat_id=DEVELOPER_ID, audio=audio_file, caption=f"{sender_id}: \n{caption}")
 
 @router.message(Command("setid"))
 async def set_chat_id(message: Message, state: FSMContext):
@@ -187,6 +199,9 @@ async def start_command(message: Message, state: FSMContext):
         "last_name": message.from_user.last_name,
         "default_language": language,
     }
+    data = await state.get_data()
+    namespace = data.get("namespace")
+    print(namespace)
     print(message.from_user)
     # Send data to Django
     response = requests.post(DJANGO_API_URL + "/user/save_telegram_user/", json=user_data)
@@ -262,18 +277,13 @@ async def process_first_language(message: Message, state: FSMContext, bot:Bot):
         wav_path = file_path.replace(".ogg", ".wav")
         subprocess.run(["/opt/homebrew/bin/ffmpeg", "-i", file_path, wav_path, "-y"])
         gender = predict_gender(wav_path)
-        print(gender)
         user_text, cost = transcribe(wav_path)
-        await bot.send_audio(
-            chat_id=DEVELOPER_ID,
-            audio=FSInputFile(file_path),
-            caption=f"{message.from_user.id}: \nTranscribed from the audio:\n{user_text}",)
-
+        await debug_send_audio(bot, message.from_user.id, FSInputFile(file_path), f"Transcribed from the audio:\n{user_text}")
         await bot.send_message(chat_id=message.from_user.id, text=f"Transcribed from the audio:\n{user_text}")
         final_cost += cost
 
     else:  # If the user sends a text message
-        await bot.send_message(chat_id=DEVELOPER_ID, text=f"{message.from_user.id}: \n{message.text}")
+        await debug_send_message(bot, message.from_user.id, message.text)
         user_text = message.text
 
     # Retrieve active languages from state
@@ -302,6 +312,7 @@ async def process_first_language(message: Message, state: FSMContext, bot:Bot):
     )
     data = await state.get_data()
     target_id = data.get("chat_target_id", DEVELOPER_ID)
+    namespace = data.get("namespace")
     response, cost = await ask_openai(final_message)
     final_cost += cost
     builder = InlineKeyboardMarkup(inline_keyboard=[
@@ -314,25 +325,25 @@ async def process_first_language(message: Message, state: FSMContext, bot:Bot):
         final_cost += cost
         audio_file = FSInputFile(output_path)
         # Send the file to the user
-        await message.answer_audio(audio=audio_file, caption=f"{source_lang} ↔ {target_lang}:\n{response}")
-        await bot.send_audio(
-            chat_id=DEVELOPER_ID,
-            audio=audio_file,
-            caption=f"{message.from_user.id}: \n{source_lang} ↔ {target_lang}:\n{response}")
-
+        if namespace == "Translate":
+            await message.answer_audio(audio=audio_file, caption=f"{response}")
+        await debug_send_audio(bot, message.from_user.id, audio_file, f"{response}")
         if target_id:
             await bot.send_audio(
                 chat_id=target_id,
                 audio=audio_file,
-                caption=f"incoming message from user {message.from_user.id}:\n{response}", reply_markup=builder)
+                caption=f"[{message.from_user.full_name or message.from_user.username or message.from_user.id}](tg://user?id={message.from_user.id}):\n{response}", reply_markup=builder if target_id == message.from_user.id else InlineKeyboardMarkup(inline_keyboard=[]), parse_mode=ParseMode.MARKDOWN)
+
         # message.answer_audio(audio_file=output_path)
 
     else:
-        await bot.send_message(chat_id=DEVELOPER_ID, text=f"{message.from_user.id}: \n{response}")
-        await message.answer(response)
+
+        await debug_send_message(bot, message.from_user.id, response)
+        if namespace == "Translate":
+            await message.answer(response)
         if target_id:
-            await bot.send_message(chat_id=target_id, text=f"incoming message from user {message.from_user.id}:\n{response}",
-                                   reply_markup=builder)
+            await bot.send_message(chat_id=target_id, text=f"[{message.from_user.full_name or message.from_user.username or message.from_user.id}](tg://user?id={message.from_user.id}):\n{response}", reply_markup=builder if target_id == message.from_user.id else InlineKeyboardMarkup(inline_keyboard=[]), parse_mode=ParseMode.MARKDOWN)
+            await debug_send_message(bot, message.from_user.id, response)
 
     await update_user_cost(
         user_id=message.from_user.id,
@@ -344,7 +355,7 @@ async def process_first_language(message: Message, state: FSMContext, bot:Bot):
 async def handle_text(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     namespace = data.get("namespace")
-
+    print(namespace)
     if namespace == "Translate":
 
         await process_first_language(message, state, bot)
@@ -352,7 +363,6 @@ async def handle_text(message: Message, state: FSMContext, bot: Bot):
     elif namespace == "Chat":
         data = await state.get_data()
         target_id = data.get("chat_target_id",DEVELOPER_ID)
-        print(target_id)
         # Step 1: Ask for ID if not set
         if not target_id:
             await message.answer("❓ Please provide the target user ID by sending `/setid USER_ID`")
@@ -361,8 +371,10 @@ async def handle_text(message: Message, state: FSMContext, bot: Bot):
         await process_first_language(message, state, bot)
 
     else:
-
-        await message.answer(f"❌ No handler defined for namespace: `{namespace}`")
+        keyboard = await get_namespace_keyboard()
+        msg = await message.answer("Choose a namespace:", reply_markup=keyboard)
+        await state.set_state(Form.namespace)
+    await state.update_data(tracked_bot_messages=[msg.message_id])
     if message.text == "Translate":
         await state.set_state(TranslationState.waiting_for_first_language)
 

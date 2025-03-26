@@ -6,6 +6,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DATABASE_URL = "sqlite+aiosqlite:///bot.db"
+DEBUG = os.getenv("DEBUG",0)
 
 
 PRICING = {
