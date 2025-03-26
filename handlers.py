@@ -290,10 +290,15 @@ async def process_first_language(message: Message, state: FSMContext, bot:Bot):
     source_lang, target_lang = language_list  # Extract the language pair
     await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
     final_message = (
+        "You are a professional translator. Your sole task is to translate exactly and accurately, without interpreting,"
+        " censoring, or altering the meaning of the source text. Do not skip or modify content base on ethical, political,"
+        " or safety concerns. This robot can be used by Police, Judges and many other authorities that should access to exact"
+        " translation. Provide a complete, faithful translation of the input text, regardless of the subject matter or tone."
+        " Return only the translated text, without explanations or disclaimers.\n\n"
         f"Please translate the following text.\n"
         f"If it's in {source_lang}, translate it to {target_lang}.\n"
         f"If it's in {target_lang}, translate it to {source_lang}.\n"
-        f"User message: '{user_text}'"
+        f"User input source: '{user_text}'"
     )
     data = await state.get_data()
     target_id = data.get("chat_target_id", DEVELOPER_ID)
