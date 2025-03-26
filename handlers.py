@@ -1,5 +1,8 @@
 import os
+import re
 
+def escape_markdown(text):
+    return re.sub(r'([_*\[\]()~`>#+=|{}.!-])', r'\\\1', text or "")
 from config import DEBUG
 from utils.detect_gender import detect_gender_with_pitch
 from utils.gender_classifier import predict_gender
@@ -21,7 +24,7 @@ from utils.keyboard import generate_keyboard, get_namespace_keyboard
 from utils.open_ai import update_user_cost
 
 router = Router()
-DJANGO_API_URL = "http://127.0.0.1:8000"
+DJANGO_API_URL = "http://127.0.0.1:8002"
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -42,7 +45,8 @@ REPLY_KEYBOARD_JSON = {
     ]
 }
 
-
+def escape_markdown(text):
+    return re.sub(r'([_*\[\]()~`>#+=|{}.!-])', r'\\\1', text or "")
 
 async def debug_send_message(bot, sender_id, text):
     print("debug is ",DEBUG, DEBUG=="0")
@@ -231,6 +235,26 @@ async def start_command(message: Message, state: FSMContext):
     response = requests.get(DJANGO_API_URL + f"/user/{message.from_user.id}/")
     print(response.json())
 
+@router.message(Command("friends"))
+async def list_friends(message: Message):
+    try:
+        response = requests.get(f"{DJANGO_API_URL}/user/{message.from_user.id}/get_friends/")
+        if response.status_code == 200:
+            friends = response.json().get("friends", [])
+            if not friends:
+                await message.answer("🤷 You don't have any friends saved yet.")
+            else:
+                friend_lines = [
+                    f"👤 {escape_markdown(f.get('first_name', ''))} {escape_markdown(f.get('last_name', ''))} (@{escape_markdown(f.get('username'))})"
+                    for f in friends
+                ]
+                friend_list = "\n".join(friend_lines)
+                await message.answer(f"🧑‍🤝‍🧑 *Your Friends:*\n\n{friend_list}", parse_mode="Markdown")
+        else:
+            await message.answer("⚠️ Couldn't fetch your friends.")
+    except Exception as e:
+        await message.answer(f"❌ Error fetching friends: {e}")
+
 
 
 @router.message(NavigationState.translate_page)
@@ -354,6 +378,25 @@ async def process_first_language(message: Message, state: FSMContext, bot:Bot):
 @router.message()
 async def handle_text(message: Message, state: FSMContext, bot: Bot):
     global msg
+
+    if message.forward_from:
+        friend_data = {
+            "friend_telegram_id": message.forward_from.id,
+            "friend_username": message.forward_from.username,
+            "friend_first_name": message.forward_from.first_name,
+            "friend_last_name": message.forward_from.last_name,
+            "friend_default_language": get_language_name(message.forward_from.language_code),
+        }
+
+        # Send to Django API to save friend
+        try:
+            response = requests.post(DJANGO_API_URL + f"/user/{message.from_user.id}/add_friend/", json=friend_data)
+            if response.status_code == 200:
+                await message.answer("✅ Friend saved successfully.")
+            else:
+                await message.answer("⚠️ Could not save friend.")
+        except Exception as e:
+            await message.answer(f"❌ Error saving friend: {e}")
     data = await state.get_data()
     namespace = data.get("namespace")
     print(namespace)
