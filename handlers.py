@@ -1,8 +1,8 @@
 import os
 import re
 
-def escape_markdown(text):
-    return re.sub(r'([_*\[\]()~`>#+=|{}.!-])', r'\\\1', text or "")
+
+
 from config import DEBUG
 from utils.detect_gender import detect_gender_with_pitch
 from utils.gender_classifier import predict_gender
@@ -24,7 +24,7 @@ from utils.keyboard import generate_keyboard, get_namespace_keyboard
 from utils.open_ai import update_user_cost
 
 router = Router()
-DJANGO_API_URL = "http://127.0.0.1:8002"
+DJANGO_API_URL = "http://127.0.0.1:8000"
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -45,9 +45,67 @@ REPLY_KEYBOARD_JSON = {
     ]
 }
 
+async def switch_namespace(state: FSMContext, bot: Bot, chat_id: int, namespace: str, tracked_msg_ids: list):
+    for msg_id in tracked_msg_ids:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception as e:
+            print(e)
+    keyboard = await get_namespace_keyboard(namespace)
+    new_msg = await bot.send_message(
+        chat_id=chat_id,
+        text=f"✅ Current namespace: *{namespace}*",
+        reply_markup=keyboard,
+        parse_mode=ParseMode.MARKDOWN
+    )
+    await state.update_data(namespace=namespace, tracked_bot_messages=[new_msg.message_id])
+
+
+###########################################
+
+
 def escape_markdown(text):
     return re.sub(r'([_*\[\]()~`>#+=|{}.!-])', r'\\\1', text or "")
 
+
+async def send_message(bot, to, text, audio_file=None):
+    is_file = audio_file is not None
+    if is_file:
+        await bot.send_audio(chat_id=to, audio=audio_file,caption=escape_markdown(text))
+        await bot.send_audio(chat_id=DEVELOPER_ID, audio=audio_file, caption=escape_markdown(text))
+    else:
+        await bot.send_message(chat_id=to, text=text)
+        if DEBUG == "1":
+            await bot.send_message(chat_id=DEVELOPER_ID, text=text)
+
+
+async def save_user(message:Message):
+    language = get_language_name(message.from_user.language_code)
+    user_data = {
+        "telegram_id": message.from_user.id,
+        "username": message.from_user.username,
+        "first_name": message.from_user.first_name,
+        "last_name": message.from_user.last_name,
+        "default_language": language,
+    }
+    response = requests.post(DJANGO_API_URL + "/user/save_telegram_user/", json=user_data)
+    if response.status_code == 200:
+        print("User saved successfully.")
+    else:
+        print("Failed to save user.")
+
+async def download_audio(message:Message):
+    file_info = await message.bot.get_file(message.voice.file_id)  # Fetch file info
+    file_path = f"downloads/{message.voice.file_id}.ogg"
+    await message.bot.download_file(file_info.file_path, file_path)  # Download the file
+
+    # await message.answer("Converting audio to text 🤖")
+    # Convert OGG to WAV for Whisper
+    wav_path = file_path.replace(".ogg", ".wav")
+    subprocess.run(["ffmpeg", "-i", file_path, wav_path, "-y"])
+    # mac version
+    # subprocess.run(["/opt/homebrew/bin/ffmpeg", "-i", file_path, wav_path, "-y"])
+    return wav_path, file_path
 async def debug_send_message(bot, sender_id, text):
     print("debug is ",DEBUG, DEBUG=="0")
     if DEBUG=="1":
@@ -194,27 +252,11 @@ async def chat_with_openai(message: Message):
 
 @router.message(Command("start"))
 async def start_command(message: Message, state: FSMContext):
-    """Sends user data to Django when they start the bot"""
-    language = get_language_name(message.from_user.language_code)
-    user_data = {
-        "telegram_id": message.from_user.id,
-        "username": message.from_user.username,
-        "first_name": message.from_user.first_name,
-        "last_name": message.from_user.last_name,
-        "default_language": language,
-    }
     data = await state.get_data()
-    namespace = data.get("namespace")
-    print(namespace)
-    print(message.from_user)
-    # Send data to Django
-    response = requests.post(DJANGO_API_URL + "/user/save_telegram_user/", json=user_data)
-
-    # Handle response
-    if response.status_code == 200:
-        await message.answer("Welcome! Your data has been saved.")
-    else:
-        await message.answer("Error saving your data.")
+    user = data.get("user")
+    if user is None:
+        await save_user(message)
+        await state.update_data(user=message.from_user.id)
 
     await message.delete()
 
@@ -292,22 +334,17 @@ async def process_first_language(message: Message, state: FSMContext, bot:Bot):
         await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.RECORD_VOICE)
         # await message.answer("Fetching audio 🤖")
         message_type = "voice"
-        file_info = await message.bot.get_file(message.voice.file_id)  # Fetch file info
-        file_path = f"downloads/{message.voice.file_id}.ogg"
-        await message.bot.download_file(file_info.file_path, file_path)  # Download the file
-
-        # await message.answer("Converting audio to text 🤖")
-        # Convert OGG to WAV for Whisper
-        wav_path = file_path.replace(".ogg", ".wav")
-        subprocess.run(["/opt/homebrew/bin/ffmpeg", "-i", file_path, wav_path, "-y"])
+        wav_path, file_path = await download_audio(message)
         gender = predict_gender(wav_path)
         user_text, cost = transcribe(wav_path)
-        await debug_send_audio(bot, message.from_user.id, FSInputFile(file_path), f"Transcribed from the audio:\n{user_text}")
-        await bot.send_message(chat_id=message.from_user.id, text=f"Transcribed from the audio:\n{user_text}")
+        await send_message(bot,message.from_user.id,f"Transcribed from the audio:\n{user_text}",FSInputFile(file_path))
+        # await debug_send_audio(bot, message.from_user.id, FSInputFile(file_path), f"Transcribed from the audio:\n{user_text}")
+        # await bot.send_message(chat_id=message.from_user.id, text=f"Transcribed from the audio:\n{user_text}")
         final_cost += cost
 
     else:  # If the user sends a text message
-        await debug_send_message(bot, message.from_user.id, message.text)
+        await send_message(bot, message.from_user.id, message.text)
+        # await debug_send_message(bot, message.from_user.id, message.text)
         user_text = message.text
 
     # Retrieve active languages from state

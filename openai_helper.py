@@ -150,7 +150,7 @@ def create_voice_out_of_text(message_id,text, gender):
     ogg_path = os.path.join(output_dir, ogg_filename)
 
     subprocess.run([
-        "/opt/homebrew/bin/ffmpeg", "-i", mp3_path,  # Input MP3 file
+        "ffmpeg", "-i", mp3_path,  # Input MP3 file
         "-c:a", "libopus",  # Use Opus codec
         "-b:a", "32k",  # Set bitrate (adjustable, 32k is Telegram standard)
         "-ar", "48000",  # Sample rate required for Telegram voice messages
