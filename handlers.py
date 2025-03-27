@@ -278,22 +278,31 @@ async def start_command(message: Message, state: FSMContext):
     print(response.json())
 
 @router.message(Command("friends"))
-async def list_friends(message: Message):
+async def list_friends(message: Message, state: FSMContext):
     try:
         response = requests.get(f"{DJANGO_API_URL}/user/{message.from_user.id}/get_friends/")
-        if response.status_code == 200:
-            friends = response.json().get("friends", [])
-            if not friends:
-                await message.answer("🤷 You don't have any friends saved yet.")
-            else:
-                friend_lines = [
-                    f"👤 {escape_markdown(f.get('first_name', ''))} {escape_markdown(f.get('last_name', ''))} (@{escape_markdown(f.get('username'))})"
-                    for f in friends
-                ]
-                friend_list = "\n".join(friend_lines)
-                await message.answer(f"🧑‍🤝‍🧑 *Your Friends:*\n\n{friend_list}", parse_mode="Markdown")
-        else:
+        if response.status_code != 200:
             await message.answer("⚠️ Couldn't fetch your friends.")
+            return
+
+        friends = response.json().get("friends", [])
+        if not friends:
+            await message.answer("🤷 You don't have any friends saved yet.")
+            return
+
+        # Create inline keyboard buttons
+        buttons = [
+            [InlineKeyboardButton(
+                text=f"{f.get('first_name', '')} {f.get('last_name', '')}".strip() or f.get('username', 'Unknown'),
+                callback_data=f"setchat:{f['telegram_id']}"
+            )]
+            for f in friends
+        ]
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+        await message.answer("🧑‍🤝‍🧑 *Choose a friend to chat with:*", parse_mode="Markdown", reply_markup=keyboard)
+
     except Exception as e:
         await message.answer(f"❌ Error fetching friends: {e}")
 
