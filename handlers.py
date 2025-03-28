@@ -66,8 +66,8 @@ async def switch_namespace(state: FSMContext, bot: Bot, chat_id: int, namespace:
 async def set_meta_data(user_id: int, key: str, value, state=None):
     if state:
         try:
-            await state.update_data(**{key: value})
             print(f"🧠 FSM state updated: {key} = {value}")
+            await state.update_data(**{key: value})
         except Exception as e:
             print(f"⚠️ FSM update failed: {e}")
 
@@ -293,8 +293,7 @@ async def set_languages(message: Message, state: FSMContext):
     # Ensure max size is 2
     language_list = language_list[-2:]
 
-    # Save updated state
-    await state.update_data(languages=language_list)
+    await set_meta_data(message.from_user.id, "languages", language_list, state)
 
     # Send confirmation
     await message.answer(f"✅ Active languages: {language_list[0]} ↔ {language_list[1]}" if len(
@@ -327,8 +326,9 @@ async def start_command(message: Message, state: FSMContext):
 
     keyboard = await get_namespace_keyboard()
     msg = await message.answer("Choose a namespace:", reply_markup=keyboard)
-    await set_meta_data(message.from_user.id, "namespace", Form.namespace.state.split(":")[1])
-    # await state.set_state(Form.namespace)
+    # print(Form.namespace.state)
+    # await set_meta_data(message.from_user.id, "namespace", Form.namespace.state.split(":")[1])
+    await state.set_state(Form.namespace)
     await state.update_data(tracked_bot_messages=[msg.message_id])
 
 
@@ -442,12 +442,13 @@ async def process_first_language(message: Message, state: FSMContext, bot: Bot):
         f"If it's in {target_lang}, translate it to {source_lang}.\n"
         f"User input source: '{user_text}'"
     )
-    data = await state.get_data()
-
-    # target_id = data.get("chat_target_id", DEVELOPER_ID)
+    # data = await state.get_data()
+    #
+    # # target_id = data.get("chat_target_id", DEVELOPER_ID)
     # namespace = data.get("namespace")
     target_id = await get_meta_data(user_id, "chat_target_id", DEVELOPER_ID, state)
-    namespace = await get_meta_data(user_id, "namespace", state)
+    print("target_id",target_id)
+    namespace = await get_meta_data(user_id, "namespace", "Translate", state)
     response, cost = await ask_openai(final_message)
     final_cost += cost
     builder = InlineKeyboardMarkup(inline_keyboard=[
@@ -463,7 +464,7 @@ async def process_first_language(message: Message, state: FSMContext, bot: Bot):
         if namespace == "Translate":
             await message.answer_audio(audio=audio_file, caption=f"{response}")
         await debug_send_audio(bot, message.from_user.id, audio_file, f"{response}")
-        if target_id:
+        if target_id and namespace =="Chat":
             await bot.send_audio(
                 chat_id=target_id,
                 audio=audio_file,
@@ -478,7 +479,7 @@ async def process_first_language(message: Message, state: FSMContext, bot: Bot):
         await debug_send_message(bot, message.from_user.id, response)
         if namespace == "Translate":
             await message.answer(response)
-        if target_id:
+        if target_id and namespace=="Chat":
             await bot.send_message(chat_id=target_id,
                                    text=f"[{message.from_user.full_name or message.from_user.username or message.from_user.id}](tg://user?id={message.from_user.id}):\n{response}",
                                    reply_markup=builder if target_id == message.from_user.id else InlineKeyboardMarkup(
@@ -516,7 +517,7 @@ async def handle_text(message: Message, state: FSMContext, bot: Bot):
             await message.answer(f"❌ Error saving friend: {e}")
     # data = await state.get_data()
     # namespace = data.get("namespace")
-    namespace = await get_meta_data(user_id, "namespace", state)
+    namespace = await get_meta_data(user_id, "namespace", "Translate",state)
 
     print(namespace)
     if namespace == "Translate":
@@ -535,6 +536,7 @@ async def handle_text(message: Message, state: FSMContext, bot: Bot):
     else:
         keyboard = await get_namespace_keyboard()
         msg = await message.answer("Choose a namespace:", reply_markup=keyboard)
+        print(Form.namespace.state)
         await state.set_state(Form.namespace)
         await set_meta_data(user_id, "namespace", Form.namespace.state.split(":")[1])
 
@@ -566,8 +568,9 @@ async def handle_namespace_callback(callback: types.CallbackQuery, state: FSMCon
     new_text = f"✅ Current namespace: *{namespace_value}*\n\n"
 
     if namespace_value.lower() == "translate":
-        languages = data.get("languages", ["english", "polish"])  # fallback defaults
+        # languages = data.get("languages", ["english", "polish"])  # fallback defaults
         languages = await get_meta_data(callback.from_user.id, "languages", ["english", "polish"], state)
+        print(languages)
         if len(languages) < 2:
             languages.append("english")
         lang1, lang2 = languages[:2]
